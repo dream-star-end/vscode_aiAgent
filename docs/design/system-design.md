@@ -67,7 +67,7 @@
 |----|---------|------|
 | `platform` | `IAIProviderService` | `src/vs/platform/aiProvider/` |
 | `platform` | `IPermissionService` | `src/vs/platform/aiPermission/` |
-| `platform` | `IModelRouterService` | `src/vs/platform/modelRouter/` |
+| `workbench/services` | `IModelRouterService` | `src/vs/workbench/services/modelRouter/` |
 | `workbench/services` | `IContextManagerService` | `src/vs/workbench/services/aiContext/` |
 | `workbench/services` | `ITaskPersistenceService` | `src/vs/workbench/services/aiTask/` |
 | `workbench/services` | `IHooksService` | `src/vs/workbench/services/aiHooks/` |
@@ -91,11 +91,13 @@ interface IAIProviderService {
   // 聊天补全（流式）
   chatCompletion(request: IChatRequest): AsyncIterable<IChatChunk>;
 
-  // 代码补全（FIM）
+  // 代码补全（FIM，支持流式和非流式）
   codeCompletion(request: ICodeCompletionRequest): Promise<ICodeCompletionResponse>;
+  codeCompletionStream(request: ICodeCompletionRequest): AsyncIterable<ICodeCompletionChunk>;
 
-  // 嵌入生成
+  // 嵌入生成（单条和批量）
   generateEmbedding(request: IEmbeddingRequest): Promise<number[]>;
+  generateEmbeddings(requests: IEmbeddingRequest[]): Promise<number[][]>;
 
   // 模型列表
   listModels(): Promise<IAIModel[]>;
@@ -109,7 +111,9 @@ interface IAIProvider {
   readonly displayName: string;
   chatCompletion(request: IChatRequest): AsyncIterable<IChatChunk>;
   codeCompletion?(request: ICodeCompletionRequest): Promise<ICodeCompletionResponse>;
+  codeCompletionStream?(request: ICodeCompletionRequest): AsyncIterable<ICodeCompletionChunk>;
   generateEmbedding?(request: IEmbeddingRequest): Promise<number[]>;
+  generateEmbeddings?(requests: IEmbeddingRequest[]): Promise<number[][]>;
   listModels(): Promise<IAIModel[]>;
 }
 
@@ -143,6 +147,7 @@ interface IAIModelMetadata {
 | `openaiProvider.ts` | OpenAI API (GPT-4o, o1, o3) |
 | `anthropicProvider.ts` | Anthropic API (Claude Sonnet, Opus) |
 | `deepseekProvider.ts` | DeepSeek API |
+| `geminiProvider.ts` | Google Gemini API (长上下文 + 高性价比) |
 | `ollamaProvider.ts` | 本地 Ollama HTTP API |
 | `customOpenAIProvider.ts` | 任意 OpenAI 兼容端点 |
 
@@ -248,52 +253,92 @@ class AgentController {
     const dag = await this.planner.decompose(goal);
     await this.taskStore.savePlan(dag);
 
-    // 3. 主循环：持续执行直到完成或暂停
+    // 3. 目标级超时控制
+    const goalTimeout = goal.constraints?.timeoutMs ?? this.DEFAULT_GOAL_TIMEOUT;
+    const goalDeadline = Date.now() + goalTimeout;
+
+    // 4. 主循环：持续执行直到完成或暂停
     while (dag.hasRunnableTasks()) {
 
-      // 3a. 选择下一批可执行任务（无依赖的）
+      // 4a. 预算检查（FR-AUTO-11）
+      const budgetStatus = this.budgetTracker.check(goal.id);
+      if (budgetStatus.percentage >= 100) {
+        await this.notify('Token 预算已用尽，任务暂停');
+        await this.taskStore.saveState();
+        return;
+      }
+      if (budgetStatus.percentage >= 80) {
+        await this.notify('Token 预算已使用 80%，请关注');
+      }
+
+      // 4b. 目标超时检查
+      if (Date.now() > goalDeadline) {
+        await this.notify('目标执行超时，任务暂停');
+        await this.taskStore.saveState();
+        return;
+      }
+
+      // 4c. 选择下一批可执行任务（无依赖的）
       const tasks = dag.getNextRunnableTasks(this.maxConcurrentWorkers);
 
-      // 3b. 为每个任务选择拓扑
+      // 4d. 为每个任务选择拓扑
       for (const task of tasks) {
         const topology = this.topologySelector.select(task);
         task.topology = topology;
       }
 
-      // 3c. 并行执行
+      // 4e. 通过全局限流器并行执行（令牌桶协调）
       const results = await Promise.all(
-        tasks.map(task => this.executeTask(task))
+        tasks.map(task => this.rateLimiter.schedule(() =>
+          this.executeTaskWithTimeout(task, this.DEFAULT_TASK_TIMEOUT)
+        ))
       );
 
-      // 3d. 任务级反思
+      // 4f. 任务级反思
       for (const result of results) {
         await this.taskReflection.reflect(result);
         await this.taskStore.updateProgress(result);
       }
 
-      // 3e. 检查是否需要重规划
+      // 4g. 检查是否需要重规划
       if (this.planner.needsReplan(dag, results)) {
         await this.planner.replan(dag, results);
       }
 
-      // 3f. 目标级反思（每 N 个任务或阶段完成时）
+      // 4h. 目标级反思（每 N 个任务或阶段完成时）
       if (this.shouldReflectOnGoal(dag)) {
         await this.goalReflection.reflect(goal, dag);
       }
 
-      // 3g. 检查暂停条件
+      // 4i. 检查暂停条件
       if (this.shouldPause(dag, results)) {
         await this.notify(dag.pauseReason);
         await this.waitForHumanInput();
       }
 
-      // 3h. 上下文压缩（任务边界自动触发）
+      // 4j. 上下文压缩（任务边界自动触发）
       await this.contextManager.compactIfNeeded();
     }
 
-    // 4. 目标完成
+    // 5. 目标完成
     await this.hooks.emit('GoalComplete', goal);
     await this.notify('目标已完成，请审查结果');
+  }
+
+  private async executeTaskWithTimeout(task: TaskNode, timeoutMs: number): Promise<TaskResult> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await this.executeTask(task, controller.signal);
+    } catch (error) {
+      if (controller.signal.aborted) {
+        await this.checkpointManager.rollback(task.id);
+        return { status: 'blocked', reason: '任务执行超时', needsHuman: true };
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async executeTask(task: TaskNode): Promise<TaskResult> {
@@ -317,20 +362,52 @@ class AgentController {
   }
 
   private async handleError(task: TaskNode, error: Error): Promise<TaskResult> {
-    // 动作级反思：尝试替代方案
-    for (let retry = 0; retry < this.maxRetries; retry++) {
+    const errorType = this.classifyError(error);
+    const maxRetries = this.getMaxRetries(errorType); // 编译/测试:3, 合并冲突:1, 未知:2
+
+    // API 限流：走全局限流器退避，不消耗重试次数
+    if (errorType === 'rate-limit') {
+      await this.rateLimiter.backoff(error);
+      return this.executeTask(task);
+    }
+
+    // 合并冲突：尝试自动解决简单冲突
+    if (errorType === 'merge-conflict') {
+      const resolved = await this.conflictResolver.tryAutoResolve(task);
+      if (resolved) return this.executeTask(task);
+      return { status: 'blocked', reason: '复杂语义冲突需人类介入', needsHuman: true };
+    }
+
+    // 编译/测试/未知错误：动作级反思 + 重试
+    for (let retry = 0; retry < maxRetries; retry++) {
       const alternatives = await this.actionReflection.generateAlternatives(task, error);
       const best = await this.actionReflection.evaluate(alternatives);
       try {
         return await this.executeWithStrategy(task, best);
       } catch (retryError) {
-        error = retryError;
+        error = retryError as Error;
       }
     }
 
     // 所有重试失败：回滚并标记为需要人类介入
     await this.checkpointManager.rollback(task.id);
     return { status: 'blocked', reason: error.message, needsHuman: true };
+  }
+
+  private classifyError(error: Error): 'compile' | 'test' | 'merge-conflict' | 'rate-limit' | 'token-exhaustion' | 'unknown' {
+    if (error instanceof CompileError) return 'compile';
+    if (error instanceof TestFailureError) return 'test';
+    if (error instanceof MergeConflictError) return 'merge-conflict';
+    if (error instanceof RateLimitError) return 'rate-limit';
+    if (error instanceof TokenExhaustionError) return 'token-exhaustion';
+    return 'unknown';
+  }
+
+  private getMaxRetries(errorType: string): number {
+    const retryMap: Record<string, number> = {
+      'compile': 3, 'test': 3, 'merge-conflict': 1, 'unknown': 2,
+    };
+    return retryMap[errorType] ?? 2;
   }
 }
 ```
@@ -348,15 +425,21 @@ class TopologySelector {
     const hasTests = this.testCoverageChecker.check(task.affectedFiles);
 
     if (difficulty === 'simple' && confidence > 0.8) {
-      return 'simple';           // 单 Worker，省成本
+      return 'simple';           // 单 Worker + 仅自动验证，省成本
     }
     if (difficulty === 'medium' || (difficulty === 'simple' && confidence <= 0.8)) {
-      return 'standard';         // Worker → Judge
+      return 'standard';         // Worker → LLM Judge
     }
     if (difficulty === 'complex' && hasTests) {
       return 'complex';          // 多 Worker 并行 + 辩论式 Judge
     }
-    return 'exploratory';        // MCTS 树搜索
+    if (difficulty === 'complex' && !hasTests) {
+      return 'standard';         // 无测试的复杂任务用标准流水线 + 更严格的 Judge 评审
+    }
+    if (confidence < 0.5) {
+      return 'exploratory';      // 仅低信心任务走 MCTS 树搜索（成本较高）
+    }
+    return 'standard';           // 默认标准流水线
   }
 }
 ```
@@ -409,7 +492,7 @@ interface IContextManagerService {
   assemblePrompt(window: IContextWindow, request: IAssembleRequest): Promise<IAssembledPrompt>;
 
   // 三层压缩
-  microCompact(window: IContextWindow, toolOutput: IToolOutput): void;
+  microCompact(window: IContextWindow, toolOutput: IToolOutput): Promise<void>;
   autoCompact(window: IContextWindow): Promise<void>;
   manualCompact(window: IContextWindow): Promise<void>;
 
@@ -444,15 +527,16 @@ interface IBudgetAllocation {
 class ContextCompactionManager {
 
   // 层 1: Micro-compaction - 每次工具调用后
-  microCompact(window: IContextWindow, toolOutput: IToolOutput): void {
+  async microCompact(window: IContextWindow, toolOutput: IToolOutput): Promise<void> {
     if (toolOutput.tokenCount > this.MICRO_THRESHOLD) {
       // 卸载到磁盘
-      const ref = this.diskStore.save(toolOutput);
+      const ref = await this.diskStore.save(toolOutput);
       // 上下文中替换为摘要引用
+      const summary = await this.quickSummarize(toolOutput);
       window.replaceToolOutput(toolOutput.id, {
-        summary: this.quickSummarize(toolOutput),
+        summary,
         diskRef: ref,
-        tokenCount: /* 摘要 token 数 */
+        tokenCount: this.tokenCounter.count(summary),
       });
     }
     // 只保留最近 2 次工具结果完整
@@ -557,15 +641,17 @@ class ToolIndex {
   private indexedTools: Map<string, IndexedToolEntry> = new Map();
 
   constructor() {
-    // 注册核心工具
-    this.coreTools.set('editFile', ...);
+    // 注册核心工具（常驻上下文 ~10 个）
     this.coreTools.set('readFile', ...);
+    this.coreTools.set('editFile', ...);
+    this.coreTools.set('smartApplyDiff', ...);   // 自研：智能差异应用
     this.coreTools.set('search', ...);
     this.coreTools.set('listDirectory', ...);
     this.coreTools.set('terminal', ...);
     this.coreTools.set('runSubagent', ...);
-    this.coreTools.set('codebaseSearch', ...);
-    this.coreTools.set('toolSearch', ...);       // 元工具：搜索其他工具
+    this.coreTools.set('codebaseSearch', ...);   // 自研：语义代码搜索
+    this.coreTools.set('projectAnalyzer', ...);  // 自研：项目结构分析
+    this.coreTools.set('toolSearch', ...);       // 自研：元工具，搜索其他工具
   }
 
   // 工具注册时建立索引
@@ -615,7 +701,7 @@ class ToolIndex {
 ### 6.1 逐步路由
 
 ```typescript
-// src/vs/platform/modelRouter/common/modelRouter.ts
+// src/vs/workbench/services/modelRouter/common/modelRouter.ts
 
 interface IModelRouterService {
   // 为当前步骤选择最优模型
@@ -623,8 +709,8 @@ interface IModelRouterService {
 }
 
 interface IRoutingContext {
-  role: 'planner' | 'worker' | 'judge' | 'subagent';
-  taskDifficulty: 'simple' | 'medium' | 'complex';
+  requiredCapability: 'reasoning' | 'coding' | 'review' | 'general';
+  complexity: number;                        // 0-1，由调用方评估
   remainingBudget: number;                   // 剩余 Token 预算
   availableModels: IAIModelMetadata[];       // 可用模型列表
 }
@@ -637,20 +723,65 @@ class ModelRouter implements IModelRouterService {
       return this.getCheapestModel(ctx.availableModels);
     }
 
-    // 按角色+难度选择
-    if (ctx.role === 'planner' || ctx.role === 'judge') {
-      return this.getStrongestModel(ctx.availableModels);      // 规划和评审用强模型
-    }
-
-    if (ctx.taskDifficulty === 'simple') {
-      return this.getCheapestModel(ctx.availableModels);       // 简单任务用便宜模型
-    }
-
-    if (ctx.taskDifficulty === 'complex') {
+    // 高复杂度（规划、评审、复杂编码）→ 强模型
+    if (ctx.complexity > 0.7) {
       return this.getStrongestModel(ctx.availableModels);
     }
 
-    return this.getBalancedModel(ctx.availableModels);         // 中等任务用平衡模型
+    // 低复杂度（简单编码、格式化）→ 便宜模型
+    if (ctx.complexity < 0.3) {
+      return this.getCheapestModel(ctx.availableModels);
+    }
+
+    // 中等复杂度 → 平衡模型
+    return this.getBalancedModel(ctx.availableModels);
+  }
+}
+
+// Agent 层的适配器：将 role/difficulty 映射为通用 complexity
+// 位于 src/vs/workbench/contrib/aiAgent/common/cost/agentModelRouterAdapter.ts
+class AgentModelRouterAdapter {
+  toRoutingContext(role: 'planner' | 'worker' | 'judge', difficulty: string): IRoutingContext {
+    const complexityMap: Record<string, Record<string, number>> = {
+      planner: { simple: 0.7, medium: 0.8, complex: 0.9 },
+      judge:   { simple: 0.6, medium: 0.7, complex: 0.9 },
+      worker:  { simple: 0.2, medium: 0.5, complex: 0.8 },
+    };
+    return {
+      requiredCapability: role === 'worker' ? 'coding' : 'reasoning',
+      complexity: complexityMap[role]?.[difficulty] ?? 0.5,
+      remainingBudget: this.budgetTracker.remaining(),
+      availableModels: this.providerService.getAvailableModels(),
+    };
+  }
+}
+```
+
+### 6.2 全局 API 限流协调器
+
+并行 Worker 共享全局限流器，避免多个 Worker 同时触发退避：
+
+```typescript
+// src/vs/workbench/services/modelRouter/common/rateLimiter.ts
+
+class GlobalRateLimiter {
+  private tokenBucket: Map<string, TokenBucket> = new Map(); // per-provider
+
+  // 在发送 API 请求前调用，排队等待可用 token
+  async schedule<T>(fn: () => Promise<T>): Promise<T> {
+    const provider = this.currentProvider;
+    const bucket = this.getOrCreateBucket(provider);
+    await bucket.acquire();
+    try {
+      return await fn();
+    } catch (error) {
+      if (this.isRateLimitError(error)) {
+        bucket.reduceRate();                   // 全局降速，而非单 Worker 退避
+        await bucket.acquire();
+        return fn();
+      }
+      throw error;
+    }
   }
 }
 ```
@@ -701,6 +832,16 @@ type HookResult = { action: 'continue' | 'block' | 'error'; message?: string };
   ]
 }
 ```
+
+**`when` 表达式**：复用 VS Code 已有的 `when clause` 表达式引擎（`contextkey` 系统），新增以下上下文变量：
+
+| 变量 | 类型 | 说明 |
+|------|------|------|
+| `toolName` | string | 当前工具名称 |
+| `toolArgs.*` | any | 工具参数 |
+| `taskId` | string | 当前任务 ID |
+| `agentMode` | string | 运行模式 (fullAuto/semiAuto/supervised) |
+| `file` | string | 受影响的文件路径 |
 
 ---
 
@@ -789,6 +930,22 @@ JSON-RPC Methods (IDE → Sidecar):
   shutdown()                          → { }
 ```
 
+### 9.3 Python Sidecar 部署与降级
+
+知识引擎为**可选功能**，IDE 核心功能不依赖 Python：
+
+| 场景 | 行为 |
+|------|------|
+| Python 未安装 | 知识引擎功能禁用，`@codebase` 降级为 ripgrep 全文搜索 |
+| Python 已安装但缺少依赖 | 首次启动时自动 `pip install` 到隔离 venv |
+| Sidecar 进程崩溃 | 自动重启（最多 3 次），超过后标记为不可用 |
+| FAISS 编译失败 | 降级为 faiss-cpu 或纯 Python 近似搜索 |
+
+**部署方式**：
+- 内置 `requirements.txt`，安装到 `~/.ai-studio/sidecar-venv/`
+- Sidecar 生命周期由 AI Agent 进程管理（启动/停止/重启）
+- 跨平台：使用 `faiss-cpu` 避免 GPU 依赖
+
 ---
 
 ## 10. 子 Agent 增强
@@ -836,8 +993,10 @@ class TokenSafetyGuard {
 
   // 每次 editFile 前
   async preEditCheck(files: string[]): Promise<void> {
-    // 创建 Git stash 检查点
-    await this.git.stash(`pre-edit-${Date.now()}`);
+    // 在临时分支创建 Git commit 检查点（避免 stash 膨胀）
+    await this.checkpointManager.createCheckpoint(`pre-edit-${Date.now()}`);
+    // 定期 GC：清理超过 1 小时的过期检查点
+    await this.checkpointManager.gcExpiredCheckpoints(this.CHECKPOINT_TTL_MS);
   }
 
   // 每步开始前
@@ -857,7 +1016,7 @@ class TokenSafetyGuard {
 
   // 多文件原子操作
   async atomicMultiFileEdit(edits: IFileEdit[]): Promise<void> {
-    const checkpoint = await this.git.stash(`atomic-${Date.now()}`);
+    const checkpoint = await this.checkpointManager.createCheckpoint(`atomic-${Date.now()}`);
     try {
       for (const edit of edits) {
         await this.applyEdit(edit);
@@ -866,8 +1025,8 @@ class TokenSafetyGuard {
       const buildOk = await this.buildVerifier.verify();
       if (!buildOk) throw new Error('Build failed after edits');
     } catch (error) {
-      // 任何失败：全部回滚
-      await this.git.stashPop(checkpoint);
+      // 任何失败：全部回滚到检查点
+      await this.checkpointManager.rollbackTo(checkpoint);
       throw error;
     }
   }
@@ -930,7 +1089,7 @@ class SkillMatcher {
   "dataFolderName": ".ai-studio",
   "urlProtocol": "ai-studio",
   "serverApplicationName": "ai-studio-server",
-  "darwinBundleIdentifier": "com.example.ai-studio",
+  "darwinBundleIdentifier": "com.aistudio.ide",       // TODO: 替换为正式域名
 
   "defaultChatAgent": {
     "chatProviderId": "ai-studio-chat",
@@ -942,7 +1101,7 @@ class SkillMatcher {
   "aiStudioDefaults": {
     "provider": "openai",
     "model.chat": "gpt-4o",
-    "model.completion": "deepseek-coder-v2",
+    "model.completion": "deepseek-chat",
     "model.agent": "claude-sonnet",
     "model.subagent": "gpt-4o-mini"
   }
@@ -994,4 +1153,4 @@ class SkillMatcher {
 
 ---
 
-> **文档状态**: 待确认。确认后编写 tasks.md。
+> **文档状态**: v1.1.0 已确认。已基于此文档编写 tasks.md。

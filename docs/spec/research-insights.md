@@ -77,8 +77,8 @@
 |------|---------|-----------|
 | **Active Context Compression / Focus Agent** (2025) | Agent 自主决定何时将原始交互压缩为持久「知识块」 | 22.7%（最高 57%） |
 | **CMV（DAG 上下文虚拟化）** (2026) | 将会话历史建模为版本控制 DAG，三趟裁剪保留所有用户/助手消息 | 20%-86% |
-| **Context Folding** (2025) | 子轨迹分支执行后折叠为摘要，10x 压缩 | 10x |
-| **SUPO** (2025) | 端到端 RL 同时优化 Agent 行为和摘要策略 | 显著 |
+| **Context Folding** (2025) | 子轨迹分支执行后折叠为摘要 | 10x |
+| **SUPO** (2025) | 端到端 RL 同时优化 Agent 行为和摘要策略（与 Context Folding 为不同工作） | 显著 |
 | **ProMem** (2025) | 迭代式自问反馈提取记忆，避免盲目摘要丢信息 | — |
 | **SWE-Pruner** (2025) | 0.6B 参数的轻量神经剪枝器，模仿程序员选择性阅读 | 23%-54% |
 
@@ -92,7 +92,8 @@
 |------|---------|---------|
 | 知识块持久化 | Focus Agent | 压缩时不只做摘要，而是提取「知识块」——Agent 学到的事实、做出的决策、发现的模式。这些知识块跨压缩持久保留 |
 | DAG 式上下文 | CMV | 上下文不是线性对话记录，而是 DAG：主线程 + 子 Agent 分支 + 工具调用分支。裁剪时可以精确裁剪分支而不影响主线 |
-| 子 Agent 轨迹折叠 | Context Folding | **直接验证了我们的子 Agent 摘要设计**——论文称之为 Context Folding，证明 10x 压缩不损失性能 |
+| 子 Agent 轨迹折叠 | Context Folding | **直接验证了我们的子 Agent 摘要设计**——论文证明子轨迹折叠为摘要可实现 10x 压缩不损失性能 |
+| 端到端压缩优化 | SUPO | Agent 行为和摘要策略联合训练（远期参考，需离线训练数据） |
 | 自问式记忆提取 | ProMem | Auto-compaction 时不做盲摘要，而是用自问循环检验摘要是否遗漏关键信息 |
 
 ---
@@ -265,7 +266,8 @@ Worker 执行前:
 | 12 | Trajectory Graph Copilot | OpenReview 2025 | 2025 |
 | 13 | Active Context Compression (Focus Agent) | arxiv 2601.07190 | 2025 |
 | 14 | CMV: DAG-Based Context Virtualisation | arxiv 2602.22402 | 2026 |
-| 15 | Context Folding (SUPO) | OpenReview 2025 | 2025 |
+| 15a | Context Folding | OpenReview 2025 | 2025 |
+| 15b | SUPO: End-to-End RL for Agent Behavior and Summarization | OpenReview 2025 | 2025 |
 | 16 | ProMem: Proactive Memory Extraction | arxiv 2601.04463 | 2025 |
 | 17 | SWE-Pruner: Adaptive Context Pruning | arxiv 2601.16746 | 2025 |
 | 18 | RouteLLM / CASTER / Budget-Aware Routing | various 2025-2026 | 2025-26 |
