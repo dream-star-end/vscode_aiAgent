@@ -2,318 +2,379 @@
 
 > 基于 VS Code OSS (v1.110.0) fork，构建开源 AI 原生 IDE
 >
-> 版本: v1.0.0-draft | 日期: 2026-03-02
+> 版本: v2.0.0-draft | 日期: 2026-03-02
+>
+> v2.0: 新增核心特色「7x24 自主 Agent」；借鉴 Claude Code 引入 Hooks、三层压缩、分层权限、项目持久上下文
 
 ---
 
-## 1. 项目概述
+## 1. 项目概述与核心定位
 
-基于 VS Code OSS (MIT) fork，构建开源、支持多模型、可私有部署的 AI 原生 IDE。对标 Cursor / Windsurf，核心差异：**完全开源、多模型自由切换、MCP 工具生态、代码知识引擎复用 DeepWiki-Open + CodeWiki**。
+基于 VS Code OSS (MIT) fork，构建开源、支持多模型、可私有部署的 AI 原生 IDE。
 
-### 1.1 可复用的已有能力
+**核心差异化（三句话）**：
+1. **7x24 自主 Agent**：以目标驱动，不需要用户推动即可持续运行直至达成目标——这是市面上没有的
+2. **IDE + Agent 双形态**：既有 Cursor 级别的编辑体验（补全/Chat/Inline Chat），又有 Claude Code 级别的 Agent 深度
+3. **完全开源 + 多模型自由**：不锁定任何 AI 服务商，支持本地模型，代码不外传
 
-| 已有框架 | 位置 | 复用方式 |
-|---------|------|---------|
-| Chat UI 框架 | `src/vs/workbench/contrib/chat/` | 注册自有 Participant |
-| Inline Chat | `src/vs/workbench/contrib/inlineChat/` | 适配自有 AI Provider |
-| Inline Completions | `src/vs/editor/contrib/inlineCompletions/` | 复用 Ghost Text 渲染 |
-| Language Model API | `ILanguageModelsService` | 扩展，注册自有 Provider |
-| Tool 系统 | `ILanguageModelToolsService` | 复用，添加工具 |
-| MCP 集成 | `src/vs/workbench/contrib/mcp/` | 直接复用 |
-| 子 Agent | `RunSubagentTool` | 复用并增强 |
-| Skills 系统 | `SKILL.md` + `promptSyntax/` | 复用并增强 |
-| 文件监视 / Ripgrep / 符号系统 / Tree-sitter | 各 `platform/` 及 `editor/` | 直接复用 |
+### 1.1 竞品定位
+
+| 维度 | Claude Code | Cursor | Devin | OpenHands | **我们** |
+|------|------------|--------|-------|-----------|---------|
+| 形态 | 终端 Agent | IDE | 云端 Agent | 开源 Agent | **IDE + 7x24 Agent** |
+| 代码补全 | 无 | 极好 | 无 | 无 | 好 |
+| Agent 深度 | 极强 | 强 | 极强 | 强 | **极强** |
+| 持续自主运行 | 否(会话制) | 部分(Cloud Agent) | 部分(定时) | 是(30h+) | **是(7x24 目标驱动)** |
+| 多模型 | 仅 Claude | 多模型 | 有限 | 多模型 | **完全开放** |
+| 开源 | 否 | 否 | 否 | 是 | **是** |
+| 费用 | $100+/月 | $20/月 | $500/月 | 自付API | **自付API** |
+
+### 1.2 可复用的已有能力
+
+| 已有框架 | 复用方式 |
+|---------|---------|
+| Chat UI / Inline Chat / Inline Completions | 注册自有 Participant / Provider |
+| Language Model API / Tool 系统 / MCP | 扩展注册 |
+| Skills (`SKILL.md` + `promptSyntax/`) | 复用并增强 |
+| 子 Agent (`RunSubagentTool`) | 复用并增强 |
+| 文件监视 / Ripgrep / 符号系统 / Tree-sitter | 直接复用 |
 
 ---
 
-## 2. 功能模块规格
+## 2. 核心特色：7x24 自主 Agent ⭐⭐⭐
 
-### 2.1 品牌定制
+### 2.1 概念
 
-修改 `product.json`：`nameShort`、`applicationName`、`dataFolderName`、`urlProtocol`、`defaultChatAgent` 等。替换 `resources/` 中的图标。保持 VS Code Extension API 100% 兼容。
+用户定义一个**目标**（而非单步任务），Agent 自动将目标分解为任务图，然后**持续自主推进**——搜索代码、编写实现、运行测试、修复错误、提交代码——无需用户推动，直至目标完成或遇到需要人类决策的节点。
 
-### 2.2 AI Provider 抽象层
+**与现有产品的本质区别**：
 
-统一多模型服务抽象，所有 AI 功能通过此层访问 LLM。
+| 维度 | 现有产品 (Cursor/Claude Code) | 我们的 7x24 Agent |
+|------|----------------------------|------------------|
+| 驱动方式 | 用户发一条指令→Agent 执行→停下等用户 | 用户定义目标→Agent 自主持续推进 |
+| 生命周期 | 单次会话，需要用户在场 | **跨会话持久运行**，用户可离开 |
+| 错误处理 | 遇错停下等用户 | **自主诊断修复**，实在不行才暂停 |
+| 上下文 | 单窗口上下文 | **持久任务状态**，上下文可压缩/恢复 |
+| 进度感知 | 用户实时观看 | **异步通知**，用户按需查看 |
 
-**P0 Provider**：OpenAI (GPT-4o/o1/o3)、Anthropic (Claude)、DeepSeek (Coder-V2/V3)
-**P1 Provider**：本地 Ollama、自定义 OpenAI 兼容端点
-**P2 Provider**：Google Gemini
+### 2.2 架构：Planner + Worker + Judge
 
-**核心接口**：
+借鉴 Cursor 的大规模 Agent 实验结论（扁平自协调失败，分角色成功）：
 
-| 接口 | 功能 |
+```
+用户定义目标: "把 Express 项目迁移到 NestJS，保持 API 兼容"
+     │
+     ▼
+┌─────────────┐
+│  Planner     │  持久运行，负责全局规划
+│  (强模型)    │  · 分解目标为任务 DAG（有向无环图）
+│             │  · 根据执行结果动态调整计划
+│             │  · 检测阻塞点，决定是否需要人类介入
+└──────┬──────┘
+       │ 分派任务
+       ▼
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│  Worker 1    │  │  Worker 2    │  │  Worker 3    │
+│  (快速模型)  │  │  (快速模型)  │  │  (快速模型)  │
+│  迁移用户模块 │  │  迁移订单模块 │  │  编写测试    │
+│  独立上下文   │  │  独立上下文   │  │  独立上下文   │
+└──────┬──────┘  └──────┬──────┘  └──────┬──────┘
+       │                │                │
+       └────────────────┼────────────────┘
+                        ▼
+                 ┌─────────────┐
+                 │   Judge      │  每个 Worker 完成后
+                 │  (强模型)    │  · 验证：build + test + lint
+                 │             │  · 代码审查：质量/安全/风格
+                 │             │  · 决定：接受/打回/需要人类审查
+                 └──────┬──────┘
+                        │
+                        ▼
+                  继续下一轮 / 通知用户 / 完成
+```
+
+### 2.3 持久任务状态
+
+7x24 运行的关键是**任务状态持久化**——Agent 必须能跨上下文压缩、跨 IDE 重启、甚至跨天保持任务进度。
+
+```
+~/.ai-studio/tasks/{goal-id}/
+├── goal.json              # 用户原始目标 + 约束
+├── plan.json              # 当前任务 DAG（Planner 维护）
+├── progress.json          # 各任务状态 (pending/running/done/failed/blocked)
+├── checkpoints/           # 每个任务完成时的 Git 快照
+│   ├── task-001.patch
+│   ├── task-002.patch
+│   └── ...
+├── context/               # 持久上下文
+│   ├── project-summary.md # 项目摘要（不随压缩丢失）
+│   ├── decisions.md       # 关键决策记录（不随压缩丢失）
+│   └── learnings.md       # Agent 学到的项目知识
+├── logs/                  # 执行日志
+│   └── {timestamp}.jsonl
+└── notifications/         # 待发送的用户通知
+```
+
+### 2.4 自主错误恢复
+
+这是 7x24 运行最难也最关键的部分——Agent 必须能自己处理大部分错误：
+
+| 错误类型 | 自主恢复策略 | 需要人类介入的条件 |
+|---------|-------------|-----------------|
+| 编译错误 | 分析错误信息→修复代码→重新编译，最多重试 3 次 | 3 次修复失败 |
+| 测试失败 | 分析失败测试→修复代码→重跑，最多重试 3 次 | 3 次修复失败 |
+| 合并冲突 | 分析冲突→自动解决简单冲突 | 复杂语义冲突 |
+| API 限流 | 指数退避等待→切换 fallback 模型 | 所有 Provider 不可用 |
+| Token 耗尽 | 压缩上下文→降级到更小模型 | 预算硬上限已达 |
+| 需求歧义 | 记录歧义点→按最合理假设继续→标记为需审查 | 多个同等合理的选择 |
+| 未知错误 | 回滚到检查点→尝试替代方案 | 2 次替代方案都失败 |
+
+### 2.5 人机协作模式
+
+7x24 不等于完全无人。Agent 在关键节点会暂停等待人类：
+
+| 暂停条件 | 通知方式 | 用户操作 |
+|---------|---------|---------|
+| 自主恢复 3 次失败 | IDE 通知 + 系统通知 | 介入修复/跳过/终止 |
+| 需要架构决策 | IDE 通知 | 选择方案 A/B/C |
+| 单个目标阶段完成 | IDE 通知 | 审查 Diff + 确认继续 |
+| Token 预算达到 80% | IDE 通知 | 追加预算/终止 |
+| 整个目标完成 | IDE 通知 + 邮件/Slack 可选 | 审查 + 合并 |
+
+**三种运行模式**：
+
+| 模式 | 说明 | 适用场景 |
+|------|------|---------|
+| **全自主** | Agent 自主运行，仅在无法恢复时暂停 | 明确的、有测试覆盖的任务 |
+| **半自主** | 每个阶段完成后暂停等待审查 | 重要功能开发 |
+| **监督式** | 每个工具调用都需确认（≈传统 Agent） | 敏感操作、学习 Agent 行为 |
+
+### 2.6 成本控制
+
+持续运行最大的顾虑是成本。必须有多层成本控制：
+
+| 控制层 | 机制 |
+|--------|------|
+| 模型路由 | Planner/Judge 用强模型，Worker 用快速便宜模型 |
+| Prompt 缓存 | 系统提示/工具定义/项目摘要走 Provider 缓存（降 ~90%） |
+| 预算上限 | 每个目标可设 Token 预算上限，达到 80% 通知，100% 暂停 |
+| 空闲检测 | 无待执行任务时 Agent 休眠，不消耗 Token |
+| 用量仪表盘 | 实时显示 Token 消耗、按任务/模型细分、费用估算 |
+
+### 2.7 关键需求汇总
+
+| 编号 | 需求 |
 |------|------|
-| `chatCompletion()` | 流式聊天补全，支持 Tool-Use |
-| `codeCompletion()` | 代码补全 (FIM 协议) |
-| `generateEmbedding()` | 文本嵌入 |
-| `listModels()` | 可用模型列表 |
-
-**关键需求**：多 Provider 配置 + 不同场景指定不同模型 + API Key 加密存储 + 自定义端点 + 热切换无需重启 + fallback 模型
-
-### 2.3 智能代码补全
-
-复用 `InlineCompletionsProvider` + Ghost Text 渲染。注册自有 Provider 对接 AI Provider 层。
-
-**关键需求**：FIM 协议 | 多行补全 | 防抖触发(350ms) | LRU 缓存(100条) | 前缀复用 | 预测性预取 | 流式渲染 | 即时取消 | Tab/Ctrl+→ 接受 | 按语言启停
-
-### 2.4 AI Chat 面板
-
-复用 `IChatService` / Chat UI 框架，注册内置 Chat Participant。
-
-**关键需求**：多轮对话 | 上下文引用 (`@file` `@folder` `@symbol` `@codebase` `@terminal` `@git` `@docs` `@web`) | 代码块一键应用 | Diff 预览(逐块接受/拒绝) | 模型切换 | 对话历史 | Markdown 渲染
-
-> **后续扩展**：图片输入（多模态）、Mermaid 图渲染等，复用已有 `mermaid-chat-features` 扩展即可，不在核心 Spec 中展开。
-
-### 2.5 Inline Chat
-
-复用 `src/vs/workbench/contrib/inlineChat/` 框架，适配自有 AI Provider。
-
-**关键需求**：选中代码对话(`Ctrl+K`) | 编辑器内 Diff 展示 | Tab 接受 / Esc 拒绝 | 预设快捷操作(解释/重构/修复/生成测试/加文档) | 连续对话
-
-### 2.6 AI Agent 系统 ⭐
-
-**本产品最核心的差异化能力。** 自主执行多步骤开发任务。
-
-**关键需求**：
-
-| 需求 | 说明 |
-|------|------|
-| 自然语言任务 → 自动规划 → 自主执行 | Tool-Use 循环 (Think → Tool → Observe) |
-| 多文件编辑 + Diff 审查 | 逐文件/逐块接受拒绝，一键全部接受/拒绝 |
-| 检查点回滚 | 每步创建检查点，支持回滚到任意点 |
-| 人工确认 + 中途打断 + 追加指令 | 危险操作需确认，用户可随时中断或追加 |
-| 实时进度 + 步骤超时 | 每步显示进度，单步 >30s 提示用户 |
-| 并行工具调用 | 无依赖的工具并行执行 |
-| 迭代上限 | 可配置，默认 25 |
-
-### 2.7 上下文管理系统 ⭐
-
-Agent 质量的命脉。当前 VS Code 无上下文裁剪、无摘要、无预算管理、工具定义全量注入。
-
-#### 按比例预算分配
-
-上下文预算按模型 `effectiveInputBudget = maxInputTokens - maxOutputTokens` 的**百分比**动态分配：
-
-| 区域 | 占比 | 可压缩 |
-|------|------|--------|
-| 固定区：系统提示词 | 3% | 否 |
-| 固定区：核心工具定义（常驻） | 3% | 否 |
-| 固定区：项目摘要 | 2% | 否 |
-| 固定区：Skills 指令 | 2% | 按相关度裁剪 |
-| 动态区 P0：用户消息 + 附件 + 检索结果 | 20% | 按相关度裁剪 |
-| 动态区 P1：活跃上下文（工具结果、子 Agent 摘要） | 30% | 可压缩 |
-| 动态区 P2：历史对话 | 20% | 旧的被摘要化 |
-| 动态区 P3：补充上下文（README、Git Diff） | 5% | 可丢弃 |
-| 弹性区：溢出缓冲 | 15% | 各区溢出时使用 |
-
-#### 小上下文自适应
-
-- `< 16K`：工具定义压缩为仅 name+单句描述、Skills 最多 2 个、历史仅 3 轮
-- `< 8K`：仅 3 个核心工具、历史仅 1 轮、项目摘要单句
-
-#### 分层压缩（5 级）
-
-| 等级 | 触发 | 策略 |
-|------|------|------|
-| L1 | >70% | 丢弃 P3 补充上下文 |
-| L2 | >80% | 历史替换为单句摘要 |
-| L3 | >85% | 工具结果替换为统计摘要 |
-| L4 | >90% | 代码骨架化(仅签名)；移除非核心工具定义 |
-| L5 | >95% | 仅当前轮次；仅核心工具 |
-
-**其他关键需求**：上下文使用量 UI 指示 | 子 Agent 结果仅摘要注入 | 工具定义动态加载(见 2.9) | Skills 按相关度注入(见 2.10)
-
-### 2.8 子 Agent 架构 ⭐
-
-主 Agent 委派子任务给专业子 Agent，**子 Agent 使用独立上下文，主 Agent 仅获取精炼摘要**。
-
-#### 与现有实现的差异
-
-| 维度 | 现状 (RunSubagentTool) | 目标 |
-|------|----------------------|------|
-| 上下文 | 中间过程流入主 UI | 独立窗口，中间过程对主 Agent 不可见 |
-| 结果 | markdown 全文返回 | 结构化精炼摘要（上限 2000 Token） |
-| 模型 | 同主 Agent | 可用更快更便宜的模型 |
-| 专业化 | 通用 | 内置专业子 Agent |
-| 递归 | 禁止 | 支持（深度上限默认 2） |
-
-#### 内置专业子 Agent
-
-| 子 Agent | 职责 | 推荐模型 | 工具集 |
-|----------|------|---------|--------|
-| CodeSearch | 找到相关代码 | 快速模型 | ripgrep, symbols, codebaseIndex |
-| CodeAnalyzer | 分析代码逻辑和依赖 | 强模型 | readFile, symbols, callHierarchy |
-| CodeWriter | 按规格编写代码 | 强模型 | editFile, createFile |
-| TestRunner | 运行测试并分析 | 快速模型 | terminal, readFile |
-| WebResearcher | 查文档和方案 | 快速模型 | fetchPage, webSearch |
-| Planner | 任务分解 | 强模型 | 无 |
-
-**其他关键需求**：并行执行 | 产出物(文件修改)直通不占摘要预算 | 元数据上报(token/耗时)
-
-### 2.9 工具体系
-
-**核心原则：不自己逐一开发工具。** MCP 生态为主 + VS Code 内置复用 + 仅自研差异化工具。
-
-#### 工具索引与按需加载
-
-**问题**：50-100+ 工具全量注入上下文可能消耗 10K-50K Token。
-
-**解决**：分两层——
-
-- **核心工具（常驻上下文，~8 个，~2-3K Token）**：editFile, readFile, search, listDirectory, terminal, runSubagent, codebaseSearch, **toolSearch**
-- **索引工具（按需加载）**：其他所有工具构建索引。Agent 通过 `toolSearch` 工具按需检索加载；或系统根据用户意图自动推荐。
-
-`toolSearch` 输入：`query`(描述需要什么能力) + 可选 `category` 过滤。索引方式：关键词匹配（默认），可扩展为语义匹配。
-
-#### MCP 推荐预配置
-
-filesystem / git / fetch / memory (官方) | mcp-deepwiki / codewiki-mcp | Code Pathfinder / Playwright (社区)
-
-#### 自研工具（仅 4 个）
-
-| 工具 | 自研原因 |
-|------|---------|
-| smartApplyDiff | LLM 输出行号不精确，需 fuzzy match |
-| codebaseSearch | 深度集成本地知识引擎 |
-| projectAnalyzer | 集成 CodeWiki 分解能力 |
-| toolSearch | 工具索引检索 |
-
-**其他需求**：MCP 工具自动注册 | 危险工具确认 | 工具白名单 | MCP Server 管理 UI
-
-### 2.10 Skills 能力
-
-复用 VS Code 已有 Skills 系统（`SKILL.md` + `<skills>` 注入），增强相关度匹配。
-
-**Skills vs Tools**：Skills 是领域知识和操作规范（Markdown 文档，LLM 内化为行为准则）；Tools 是可调用的函数。
-
-**关键需求**：自动发现 `.github/skills/` 等目录 | 个人 Skills (`~/.agents/skills/`) | **按相关度注入（不是全部加载）** | Skill 索引 | 手动 `/name` 触发 | `disable-model-invocation` 标记 | 纳入上下文预算(固定区 2%) | Skill+Tool 联动
-
-> **后续扩展**：Skill 创建向导、Skill 市场等，属于锦上添花，后续迭代。
-
-### 2.11 本地代码知识引擎
-
-让 AI 理解整个代码库。**策略：复用开源引擎 + 自研增量编排层。**
-
-#### 复用的开源组件
-
-| 来源 | 复用内容 |
-|------|---------|
-| **DeepWiki-Open** (MIT, 13.3K+ stars) | `rag_engine.py` (FAISS 向量检索), `embedding_service.py` (多 Provider 嵌入), `data_pipeline.py` (智能分块) |
-| **CodeWiki** (FSoft-AI4Code, 7 语言) | `decomposition/` (AST → 依赖图 → 层级分解), `agent/` (多 Agent 递归分析) |
-
-#### 自研增量编排层（两个开源项目都没有）
-
-| 模块 | 功能 |
-|------|------|
-| 文件变更收集器 | 复用 VS Code FileWatcher，500ms 防抖+批量合并 |
-| 文件指纹缓存 | SHA256 比对，跳过未变文件 |
-| 增量分派器 | 单文件维度增量解析和嵌入更新 |
-| 缓存失效管理 | 级联标记 stale，懒更新 |
-| 查询路由 | 结构查询→CodeWiki，语义查询→DeepWiki |
-| IPC 通信 | JSON-RPC over stdio (Python sidecar) |
-
-**关键需求**：后台渐进式首次索引(优先当前文件) | 增量更新(<2s) | 级联失效+懒更新 | `@codebase` 语义搜索 | `@docs` 文档检索 | 结构查询("谁调用了X") | 项目摘要 | 不阻塞 UI | 离线可用(Ollama) | 代码不外传 | 大项目降级
-
-**集成两阶段**：第一阶段通过 MCP Server 接入(1-2 周)；第二阶段 fork 定制为 sidecar + 增量层(3-4 周)。
-
-### 2.12 终端 AI 增强 / 设置与配置
-
-> 均属于锦上添花功能，框架复用 VS Code 已有能力即可实现，不在此展开设计。
-
-**终端增强**：自然语言转命令 | 错误分析 | 命令解释 | Agent 终端集成。复用 VS Code Terminal API。
-
-**设置配置**：Provider/模型配置 | 补全/Agent/子Agent 参数 | MCP Server 管理 | 知识引擎配置 | Skills 管理 | 隐私设置。初期用 `settings.json`，后续按需做可视化 UI。
+| FR-AUTO-01 | 目标定义：用户用自然语言描述高级目标，可附加约束(不改X文件、用Y框架等) |
+| FR-AUTO-02 | 自动分解：Planner 将目标分解为任务 DAG，支持并行和依赖关系 |
+| FR-AUTO-03 | 持续执行：Worker 持续执行任务，无需用户逐步推动 |
+| FR-AUTO-04 | 自验证：每个任务完成后自动 build + test + lint |
+| FR-AUTO-05 | 自主错误恢复：编译/测试失败自动修复，最多重试 N 次 |
+| FR-AUTO-06 | 检查点：每个任务完成时创建 Git 检查点，支持任意回滚 |
+| FR-AUTO-07 | 持久状态：任务进度持久化到磁盘，IDE 重启后可恢复 |
+| FR-AUTO-08 | 异步通知：关键节点通知用户(IDE/系统通知/可选邮件Slack) |
+| FR-AUTO-09 | 人机暂停：不确定时主动暂停等人类决策 |
+| FR-AUTO-10 | 三种模式：全自主/半自主/监督式 |
+| FR-AUTO-11 | 预算控制：Token 预算上限 + 用量仪表盘 |
+| FR-AUTO-12 | 进度仪表盘：任务 DAG 可视化 + 各任务状态 + 时间线 |
+| FR-AUTO-13 | 并行 Worker：无依赖任务并行执行（最多 N 个 Worker） |
+| FR-AUTO-14 | 动态重规划：执行过程中 Planner 可根据结果调整计划 |
 
 ---
 
-## 3. 性能设计
+## 3. 借鉴 Claude Code 的增强设计
 
-### 3.1 性能预算总表
+### 3.1 三层上下文压缩（替代原 5 级线性压缩）
+
+借鉴 Claude Code 的三层压缩模型，比我们之前的 L1-L5 线性压缩更实用：
+
+| 层 | 名称 | 触发 | 机制 | 保留 |
+|----|------|------|------|------|
+| 1 | **Micro-compaction** | 每次工具调用后 | 大工具输出卸载到磁盘，上下文只保留摘要引用 | 最近 1-2 次工具结果完整保留 |
+| 2 | **Auto-compaction** | 剩余空间 < 安全阈值 | 全文摘要：历史→单句，工具结果→统计 | 关键状态恢复：当前任务+TODO+最近文件+决策记录 |
+| 3 | **Manual /compact** | 用户或 7x24 Agent 主动触发 | 深度摘要+状态重建 | 从持久任务状态（2.3）恢复完整工作上下文 |
+
+**与 7x24 Agent 的配合**：7x24 Agent 可以在每个任务边界自动触发 Manual compact，因为持久任务状态在磁盘上，压缩不会丢失进度。这解决了 Claude Code 最大的痛点（压缩后遗忘）。
+
+### 3.2 Hooks 生命周期系统
+
+借鉴 Claude Code 的 Hooks，让用户可以在 Agent 生命周期的关键节点插入自定义逻辑：
+
+| 事件 | 触发时机 | 典型用途 |
+|------|---------|---------|
+| `SessionStart` | 会话开始 | 加载项目配置、启动服务 |
+| `PreToolUse` | 工具调用前 | 阻止危险命令、自动 lint |
+| `PostToolUse` | 工具调用后 | 文件保存后自动格式化 |
+| `PreCompact` | 上下文压缩前 | 保存关键状态到磁盘 |
+| `SubagentStart/Stop` | 子 Agent 生命周期 | 资源分配和清理 |
+| `TaskComplete` | 7x24 任务完成 | 运行集成测试、发通知 |
+| `GoalComplete` | 7x24 目标完成 | 生成总结报告、创建 PR |
+
+Hook 类型：Shell 命令 | HTTP 端点 | 自定义脚本。返回值可控制流程（继续/阻止/修改）。
+
+### 3.3 分层权限系统
+
+借鉴 Claude Code 的权限模型，替代我们之前简单的"确认+白名单"：
+
+| 层 | 操作 | 默认行为 | 持久范围 |
+|----|------|---------|---------|
+| 只读 | readFile, search, listDir, symbols | 自动允许 | — |
+| 编辑 | editFile, createFile | 需确认 | 会话内持久 |
+| 执行 | terminal, bash | 需确认 | 按项目+命令持久 |
+| 危险 | deleteFile, git push, deploy | 始终确认 | 不持久 |
+
+支持 specifier 粒度：`Bash(npm run *)` 允许所有 npm 脚本；`Read(.env)` 单独控制 .env 读取。
+
+权限评估顺序：deny → ask → allow。7x24 全自主模式下，编辑和执行层自动允许，仅危险层需确认。
+
+### 3.4 项目持久上下文 (AISTUDIO.md)
+
+借鉴 Claude Code 的 `CLAUDE.md`，复用 VS Code 已有的 `copilot-instructions.md` 机制：
+
+用户在项目根目录创建 `AISTUDIO.md`（或复用 `.github/copilot-instructions.md`），内容每次会话自动加载到固定区（2%预算）：
+
+```markdown
+# 项目规则
+- 包管理器用 pnpm，不要用 npm
+- API 端点都在 src/api/ 下，遵循 RESTful 规范
+- 测试命令: pnpm test
+- 不要修改 src/core/ 下的任何文件
+- 提交信息格式: type(scope): description
+```
+
+与 Skills 的区别：AISTUDIO.md 是**全局始终加载的**项目规则；Skills 是**按需匹配**的领域知识。
+
+### 3.5 Token 安全保护
+
+Claude Code 最大的痛点之一是 Token 耗尽时代码损坏。我们必须避免：
+
+| 保护机制 | 说明 |
+|---------|------|
+| 写前检查点 | 每次 editFile 前自动创建 Git stash 检查点 |
+| Token 余量预测 | 每步开始前预估所需 Token，不足时主动压缩或暂停 |
+| 原子操作 | 多文件修改要么全部成功，要么全部回滚 |
+| 优雅降级 | Token 接近上限时：停止新任务→完成当前步骤→保存状态→暂停 |
+
+---
+
+## 4. 基础功能模块
+
+> 以下模块在之前版本中已详细定义，此处保留核心要点。
+
+### 4.1 品牌定制
+
+修改 `product.json` 品牌信息 + `resources/` 图标。保持 VS Code Extension API 100% 兼容。
+
+### 4.2 AI Provider 抽象层
+
+统一多模型抽象。接口：`chatCompletion()` / `codeCompletion()` / `generateEmbedding()` / `listModels()`。
+P0: OpenAI, Anthropic, DeepSeek。P1: Ollama, 自定义端点。支持 fallback、热切换、API Key 加密。
+
+### 4.3 智能代码补全
+
+复用 `InlineCompletionsProvider`。FIM 协议 | 防抖 | LRU 缓存 | 前缀复用 | 预取 | 流式 | 即时取消。
+
+### 4.4 AI Chat + Inline Chat
+
+复用 VS Code Chat/InlineChat 框架。多轮对话 | `@` 上下文引用 | Diff 预览 | 模型切换。
+
+### 4.5 上下文管理
+
+按模型 `effectiveInputBudget` 百分比分配预算（固定区 10% + 动态区 75% + 弹性区 15%）。三层压缩（3.1）。工具定义动态加载（4.7）。小上下文自适应。
+
+### 4.6 子 Agent
+
+独立上下文 | 结果精炼摘要(≤2000 Token) | 专业化(CodeSearch/CodeAnalyzer/CodeWriter/TestRunner/WebResearcher/Planner) | 并行执行 | 快速模型优先。
+
+### 4.7 工具体系
+
+核心工具常驻(~8 个) + 索引工具按需加载(`toolSearch`)。MCP 生态为主。自研仅 4 个(smartApplyDiff/codebaseSearch/projectAnalyzer/toolSearch)。
+
+### 4.8 Skills
+
+复用 VS Code `SKILL.md`。按相关度注入 | Skill 索引 | 手动触发 | 预算感知 | Skill+Tool 联动。
+
+### 4.9 本地代码知识引擎
+
+复用 DeepWiki-Open (RAG/FAISS/嵌入) + CodeWiki (AST/依赖图/层级分解)。自研增量编排层(FileWatcher+指纹+增量分派+懒更新)。两阶段集成(MCP→sidecar)。
+
+### 4.10 终端 AI / 设置配置
+
+后续扩展，复用 VS Code 已有能力。
+
+---
+
+## 5. 性能设计
+
+### 5.1 性能预算
 
 | 场景 | 延迟预算 |
 |------|---------|
-| 代码补全（冷启动） | < 800ms（防抖 350 + 组装 50 + API ~400） |
-| 代码补全（缓存命中） | < 50ms |
-| Chat 首 Token (TTFT) | < 1.5s |
-| Chat 流式渲染 | ≥ 30fps |
-| Agent 单步 (Think→Tool→Observe) | < 3s |
-| 子 Agent（典型搜索类） | < 30s |
-| `@codebase` 查询 | < 500ms |
-| 增量索引（单文件保存） | < 2s |
-| Diff 审查渲染（10 文件） | < 500ms |
-| IDE 启动时间 | 与原版 VS Code 持平（AI 全部延迟初始化） |
+| 代码补全（冷/缓存） | < 800ms / < 50ms |
+| Chat TTFT / 渲染 | < 1.5s / ≥ 30fps |
+| Agent 单步 / 子 Agent | < 3s / < 30s |
+| @codebase 查询 / 增量索引 | < 500ms / < 2s |
+| 7x24 单任务周期 | < 5min（典型），自动压缩+恢复无感知 |
+| IDE 启动 | 与原版 VS Code 持平 |
 
-### 3.2 性能红线
+### 5.2 性能红线
 
-| 红线 | 说明 |
-|------|------|
-| **主线程不执行 AI 操作** | LLM 调用、Token 计数、上下文组装全部在 Worker/独立进程 |
-| **用户输入不被阻塞** | 按键延迟 < 16ms，任何后台操作期间 |
-| **IDE 启动不变慢** | AI 功能全部延迟初始化 |
-| **内存不失控** | 所有缓存有上限，超出降级而非 OOM；中型项目 ≤1.5GB，大型 ≤2.5GB |
-| **AI 操作可取消** | 所有 AI 操作支持 CancellationToken |
+主线程不执行 AI 操作 | 按键 < 16ms | IDE 启动不变慢 | 内存不失控(中型 ≤1.5GB) | 所有 AI 操作可取消 | **7x24 Agent Token 消耗可预测可控制**
 
-### 3.3 关键优化策略
+### 5.3 关键优化策略
 
-**代码补全**：即时取消旧请求 | LRU 缓存(100条) | 前缀复用 | 预测性预取 | 流式渲染 | 上下文在 Worker 线程组装 | 本地模型预热
-
-**Chat / Agent**：流式输出 | Markdown 增量渲染(30fps 节流) | 代码块延迟高亮 | 工具结果懒渲染 | HTTP/2 连接复用 | 并行工具调用 | 检查点增量快照(仅 diff) | Diff 虚拟化滚动 | 超时熔断(30s)
-
-**上下文管理**：Token 计数缓存+增量计数 | 本地 Tiktoken WASM | 固定内容预计算 | 摘要异步生成+缓存 | L1-L2 压缩快速路径(<5ms)
-
-**子 Agent**：并行执行 | 快速模型优先 | 轻量上下文(不继承历史) | 提前终止 | 摘要本地规则优先(必要时才用 LLM) | Token 硬上限
-
-**知识引擎**：独立进程 | 优先级队列(当前文件优先) | 防抖批量 | 指纹跳过 | 增量 FAISS add/remove | 增量 AST (Tree-sitter) | 嵌入批处理+磁盘缓存 | 渐进式首次索引 | 大文件跳过 | .gitignore 遵循
-
-**工具调用**：MCP Server 预启动+保活 | 结果缓存(30s) | 大结果截断+摘要 | 内置工具走进程内快速路径
-
-**网络**：HTTP/2 复用 | 连接预热 | 指数退避重试(3 次) | 断线优雅降级 | 本地模型零网络
+**补全**：即时取消 | LRU 缓存 | 前缀复用 | 预取 | Worker 线程组装
+**Agent**：流式输出 | 增量渲染 | 并行工具 | 检查点增量快照 | 超时熔断
+**上下文**：Token 计数缓存 | Tiktoken WASM | Micro-compaction 磁盘卸载 | 摘要异步+缓存
+**7x24**：Prompt 缓存(~90%降本) | 模型路由(Worker用便宜模型) | 空闲休眠 | 持久状态免重建
+**知识引擎**：独立进程 | 优先级队列 | 增量 FAISS/AST | 嵌入批处理 | 渐进式索引
 
 ---
 
-## 4. 非功能性需求
+## 6. 非功能性需求
 
 | 类别 | 需求 |
 |------|------|
-| 安全 | API Key 加密存储(OS 密钥链) · 代码不外传(索引 100% 本地) · Agent 沙箱(危险操作确认) · MCP Server 权限控制 |
+| 安全 | API Key 加密 · 代码不外传 · 分层权限(3.3) · Token 安全保护(3.5) |
 | 兼容性 | VS Code 扩展 100% 兼容 · Windows / macOS / Linux |
-| 可用性 | 离线模式(Ollama) · AI 不可用时不影响编辑功能 |
-| 可维护性 | 遵循 VS Code 分层架构 · 遵循编码规范 |
-| 可观测性 | AI 操作日志(模型/Token/延迟) · 性能度量埋点 · 用量统计(Token/费用) |
+| 可用性 | 离线模式(Ollama) · AI 不可用不影响编辑 · 7x24 Agent 断线自动恢复 |
+| 可维护性 | VS Code 分层架构 · 编码规范 |
+| 可观测性 | AI 日志 · 性能埋点 · Token 用量仪表盘 · 7x24 任务进度仪表盘 |
 
 ---
 
-## 5. 技术决策
+## 7. 技术决策
 
-### 复用 vs 自研总览
+### 复用 vs 自研
 
 | 模块 | 决策 | 来源 |
 |------|------|------|
-| Chat / Inline Chat / Ghost Text / LM API / Tool 系统 / MCP / Skills | **复用** | VS Code 已有框架 |
-| 文件监视 / Ripgrep / 符号系统 / Tree-sitter | **复用** | VS Code 平台层 |
-| AST 依赖图 + 层级分解 | **复用** | CodeWiki |
-| RAG + FAISS + 嵌入 | **复用** | DeepWiki-Open |
-| 文件/Git/Web 等工具 | **复用** | MCP 开源 Server |
-| **AI Provider 抽象层** | **自研** | — |
-| **上下文管理器(按比例预算+压缩)** | **自研** | — |
-| **工具索引与按需加载** | **自研** | — |
-| **子 Agent 增强(独立上下文+摘要)** | **自研** | — |
-| **知识引擎增量编排层** | **自研** | — |
-| **Skill 相关度匹配** | **自研** | — |
-| **品牌定制** | **修改** | product.json + 资源 |
+| Chat / InlineChat / Completions / LM API / Tool / MCP / Skills | **复用** | VS Code |
+| 文件监视 / Ripgrep / 符号 / Tree-sitter | **复用** | VS Code |
+| AST 依赖图 + RAG + FAISS | **复用** | CodeWiki + DeepWiki-Open |
+| 文件/Git/Web 工具 | **复用** | MCP 生态 |
+| **AI Provider 抽象层** | **自研** | |
+| **7x24 自主 Agent (Planner+Worker+Judge)** | **自研** | ⭐ 核心特色 |
+| **持久任务状态 + 自主错误恢复** | **自研** | ⭐ 核心特色 |
+| **三层上下文压缩 + 按比例预算** | **自研** | 借鉴 Claude Code |
+| **Hooks 生命周期** | **自研** | 借鉴 Claude Code |
+| **分层权限系统** | **自研** | 借鉴 Claude Code |
+| **工具索引 + 子 Agent 增强 + Skill 匹配 + 增量编排层** | **自研** | |
+| **品牌定制** | **修改** | product.json |
 
 ---
 
-## 6. 实施阶段
+## 8. 实施阶段
 
 ```
-Week  1-2   Phase 0: 品牌定制 + AI Provider 抽象层 + MCP 预配置
-Week  3-6   Phase 1: 代码补全 + Chat + Inline Chat + 上下文管理器 + 工具索引
-Week  7-10  Phase 2: Agent 系统 + 子 Agent 增强 + Skills 集成 + Diff 审查
-Week 11-14  Phase 3: 代码知识引擎 (MCP 接入 → sidecar + 增量层)
-Week 15-20  Phase 4: 性能优化 + 测试 + 构建打包
+Week  1-2   Phase 0: 品牌定制 + AI Provider + MCP 预配置 + 分层权限
+Week  3-6   Phase 1: 补全 + Chat + InlineChat + 三层上下文压缩 + 工具索引 + Hooks
+Week  7-12  Phase 2: 7x24 Agent (Planner+Worker+Judge+持久状态+自主恢复+任务仪表盘)
+Week 13-16  Phase 3: 代码知识引擎 (MCP → sidecar + 增量层) + Skills
+Week 17-22  Phase 4: 性能优化 + 成本优化 + 测试 + 打包
 ```
+
+> 注：Phase 2 从 4 周扩展到 6 周，因为 7x24 Agent 是全新核心能力，需要更多时间。
 
 ---
 
@@ -321,16 +382,18 @@ Week 15-20  Phase 4: 性能优化 + 测试 + 构建打包
 
 | 术语 | 定义 |
 |------|------|
+| 7x24 Agent | 以目标驱动的持续自主运行 Agent，不需要用户逐步推动 |
+| Planner | 负责目标分解和动态重规划的强模型 Agent |
+| Worker | 执行具体任务的快速模型 Agent，独立上下文 |
+| Judge | 验证 Worker 产出质量的评审 Agent |
+| Task DAG | 有向无环的任务依赖图 |
+| Micro-compaction | 大工具输出即时卸载到磁盘的压缩层 |
 | FIM | Fill-In-Middle，代码补全协议 |
-| MCP | Model Context Protocol，LLM 与工具/数据源的标准协议 |
-| RAG | Retrieval-Augmented Generation，检索增强生成 |
-| FAISS | Facebook AI Similarity Search，向量相似度搜索 |
-| Sidecar | 与主进程并行运行的辅助进程 |
-| Tool-Use Loop | Agent 的 Think→Tool Call→Observe 循环 |
-| Skill | Markdown 形式的领域知识/操作规范，Agent 内化为行为准则 |
-| Tool Index | 非核心工具的索引，Agent 按需检索加载 |
-| TTFT | Time To First Token，首 Token 延迟 |
-| effectiveInputBudget | maxInputTokens - maxOutputTokens，可用输入预算 |
+| MCP | Model Context Protocol |
+| Hook | Agent 生命周期事件的自定义回调 |
+| Skill | Markdown 领域知识，Agent 内化为行为准则 |
+| AISTUDIO.md | 项目级持久上下文文件，每次会话自动加载 |
+| effectiveInputBudget | maxInputTokens - maxOutputTokens |
 
 ---
 
