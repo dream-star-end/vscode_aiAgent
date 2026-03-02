@@ -1,8 +1,36 @@
-# VS Code Agents Instructions
+# AI Studio (VS Code Fork) Agents Instructions
 
-This file provides instructions for AI coding agents working with the VS Code codebase.
+This file provides instructions for AI coding agents working with the AI Studio codebase (VS Code OSS fork).
 
-For detailed project overview, architecture, coding guidelines, and validation steps, see the [Copilot Instructions](.github/copilot-instructions.md).
+For VS Code base project overview, architecture, coding guidelines, and validation steps, see the [Copilot Instructions](.github/copilot-instructions.md).
+
+## AI Studio 开发规则
+
+### 任务管理
+
+- **任务清单**: 所有开发任务定义在 [`docs/tasks.md`](docs/tasks.md) 中，严格按照任务清单推进开发。
+- **状态更新**: 每完成一个任务，**立即**更新 `docs/tasks.md` 中对应任务的状态（`[ ]` → `[~]` → `[x]`）。
+- **依赖顺序**: 不得跳过任务依赖。开始一个任务前，确认其所有依赖任务已标记为 `[x]`。
+- **阻塞处理**: 如果任务被阻塞，标记为 `[!]` 并在旁边注明阻塞原因，然后继续其他不被阻塞的任务。
+- **进度统计**: 每次提交时更新 `docs/tasks.md` 底部的进度统计表。
+
+### 核心文档
+
+| 文档 | 路径 | 用途 |
+|------|------|------|
+| 产品需求规格 | `docs/spec/ai-ide-spec.md` | 功能需求和验收标准的最终来源 |
+| 论文调研 | `docs/spec/research-insights.md` | 设计决策的学术依据 |
+| 系统设计 | `docs/design/system-design.md` | 架构、接口和数据流的实现参考 |
+| 任务清单 | `docs/tasks.md` | 开发进度跟踪，每次提交必须同步更新 |
+
+### VS Code 分层规则
+
+新增模块必须遵循 VS Code 的 `base → platform → editor → workbench` 分层：
+- `platform` 层：`IAIProviderService`、`IPermissionService`（不依赖 workbench 层类型）
+- `workbench/services` 层：`IContextManagerService`、`ITaskPersistenceService`、`IHooksService`、`IModelRouterService`
+- `workbench/contrib` 层：`aiAgent/`、`aiCompletion/`、`aiDashboard/`
+
+使用 `npm run valid-layers-check` 验证分层合规。
 
 ## Cursor Cloud specific instructions
 
