@@ -32,6 +32,9 @@ export interface IAIProviderService {
 	getActiveProviderId(): string | undefined;
 	setActiveProvider(id: string): void;
 	getRegisteredProviderIds(): string[];
+
+	setFallbackOrder(providerIds: string[]): void;
+	getFallbackOrder(): string[];
 }
 
 // -- Provider Interface ----------------------------------------------

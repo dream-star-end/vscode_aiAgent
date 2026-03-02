@@ -28,6 +28,7 @@ export class AIProviderService extends Disposable implements IAIProviderService 
 	private readonly _providers = new Map<string, IAIProvider>();
 	private _activeProviderId: string | undefined;
 	private readonly _modelMetadataCache = new Map<string, IAIModelMetadata>();
+	private _fallbackOrder: string[] = [];
 
 	private readonly _onDidChangeProviders = this._register(new Emitter<void>());
 	readonly onDidChangeProviders: Event<void> = this._onDidChangeProviders.event;
@@ -86,61 +87,140 @@ export class AIProviderService extends Disposable implements IAIProviderService 
 		return [...this._providers.keys()];
 	}
 
-	private getActiveProvider(): IAIProvider {
-		if (!this._activeProviderId) {
-			throw new Error('[AIProvider] No active provider set.');
+	/**
+	 * Returns providers to try in order: active provider first, then fallback providers.
+	 */
+	private getProvidersWithFallback(): IAIProvider[] {
+		const result: IAIProvider[] = [];
+		const active = this._activeProviderId;
+		if (active) {
+			const provider = this._providers.get(active);
+			if (provider) {
+				result.push(provider);
+			}
 		}
-		const provider = this._providers.get(this._activeProviderId);
-		if (!provider) {
-			throw new Error(`[AIProvider] Active provider '${this._activeProviderId}' not found.`);
+		for (const id of this._fallbackOrder) {
+			if (id !== active && this._providers.has(id)) {
+				result.push(this._providers.get(id)!);
+			}
 		}
-		return provider;
+		return result;
+	}
+
+	setFallbackOrder(providerIds: string[]): void {
+		this._fallbackOrder = [...providerIds];
+		this.logService.info(`[AIProvider] Fallback order set: ${providerIds.join(', ')}`);
+	}
+
+	getFallbackOrder(): string[] {
+		return [...this._fallbackOrder];
 	}
 
 	// -- Chat Completion ---
 
 	async *chatCompletion(request: IChatCompletionRequest, token?: CancellationToken): AsyncIterable<IChatCompletionChunk> {
-		const provider = this.getActiveProvider();
-		yield* provider.chatCompletion(request, token);
+		const providers = this.getProvidersWithFallback();
+		if (providers.length === 0) {
+			throw new Error('[AIProvider] No active provider set.');
+		}
+		let lastError: Error | undefined;
+		for (const provider of providers) {
+			try {
+				yield* provider.chatCompletion(request, token);
+				return;
+			} catch (err) {
+				lastError = err instanceof Error ? err : new Error(String(err));
+				this.logService.warn(`[AIProvider] Provider '${provider.id}' failed for chatCompletion, trying fallback.`, lastError);
+			}
+		}
+		throw lastError ?? new Error('[AIProvider] All providers failed for chatCompletion.');
 	}
 
 	// -- Code Completion ---
 
 	async codeCompletion(request: ICodeCompletionRequest, token?: CancellationToken): Promise<ICodeCompletionResponse> {
-		const provider = this.getActiveProvider();
-		if (!provider.codeCompletion) {
-			throw new Error(`[AIProvider] Provider '${provider.id}' does not support code completion.`);
+		const providers = this.getProvidersWithFallback();
+		if (providers.length === 0) {
+			throw new Error('[AIProvider] No active provider set.');
 		}
-		return provider.codeCompletion(request, token);
+		let lastError: Error | undefined;
+		for (const provider of providers) {
+			if (!provider.codeCompletion) {
+				continue;
+			}
+			try {
+				return await provider.codeCompletion(request, token);
+			} catch (err) {
+				lastError = err instanceof Error ? err : new Error(String(err));
+				this.logService.warn(`[AIProvider] Provider '${provider.id}' failed for codeCompletion, trying fallback.`, lastError);
+			}
+		}
+		throw lastError ?? new Error('[AIProvider] No provider supports code completion.');
 	}
 
 	async *codeCompletionStream(request: ICodeCompletionRequest, token?: CancellationToken): AsyncIterable<ICodeCompletionChunk> {
-		const provider = this.getActiveProvider();
-		if (!provider.codeCompletionStream) {
-			throw new Error(`[AIProvider] Provider '${provider.id}' does not support streaming code completion.`);
+		const providers = this.getProvidersWithFallback();
+		if (providers.length === 0) {
+			throw new Error('[AIProvider] No active provider set.');
 		}
-		yield* provider.codeCompletionStream(request, token);
+		let lastError: Error | undefined;
+		for (const provider of providers) {
+			if (!provider.codeCompletionStream) {
+				continue;
+			}
+			try {
+				yield* provider.codeCompletionStream(request, token);
+				return;
+			} catch (err) {
+				lastError = err instanceof Error ? err : new Error(String(err));
+				this.logService.warn(`[AIProvider] Provider '${provider.id}' failed for codeCompletionStream, trying fallback.`, lastError);
+			}
+		}
+		throw lastError ?? new Error('[AIProvider] No provider supports streaming code completion.');
 	}
 
 	// -- Embedding ---
 
 	async generateEmbedding(request: IEmbeddingRequest, token?: CancellationToken): Promise<number[]> {
-		const provider = this.getActiveProvider();
-		if (!provider.generateEmbedding) {
-			throw new Error(`[AIProvider] Provider '${provider.id}' does not support embedding generation.`);
+		const providers = this.getProvidersWithFallback();
+		if (providers.length === 0) {
+			throw new Error('[AIProvider] No active provider set.');
 		}
-		return provider.generateEmbedding(request, token);
+		let lastError: Error | undefined;
+		for (const provider of providers) {
+			if (!provider.generateEmbedding) {
+				continue;
+			}
+			try {
+				return await provider.generateEmbedding(request, token);
+			} catch (err) {
+				lastError = err instanceof Error ? err : new Error(String(err));
+				this.logService.warn(`[AIProvider] Provider '${provider.id}' failed for generateEmbedding, trying fallback.`, lastError);
+			}
+		}
+		throw lastError ?? new Error('[AIProvider] No provider supports embedding generation.');
 	}
 
 	async generateEmbeddings(requests: IEmbeddingRequest[], token?: CancellationToken): Promise<number[][]> {
-		const provider = this.getActiveProvider();
-		if (provider.generateEmbeddings) {
-			return provider.generateEmbeddings(requests, token);
+		const providers = this.getProvidersWithFallback();
+		if (providers.length === 0) {
+			throw new Error('[AIProvider] No active provider set.');
 		}
-		if (!provider.generateEmbedding) {
-			throw new Error(`[AIProvider] Provider '${provider.id}' does not support embedding generation.`);
+		let lastError: Error | undefined;
+		for (const provider of providers) {
+			try {
+				if (provider.generateEmbeddings) {
+					return await provider.generateEmbeddings(requests, token);
+				}
+				if (provider.generateEmbedding) {
+					return await Promise.all(requests.map(r => provider.generateEmbedding!(r, token)));
+				}
+			} catch (err) {
+				lastError = err instanceof Error ? err : new Error(String(err));
+				this.logService.warn(`[AIProvider] Provider '${provider.id}' failed for generateEmbeddings, trying fallback.`, lastError);
+			}
 		}
-		return Promise.all(requests.map(r => provider.generateEmbedding!(r, token)));
+		throw lastError ?? new Error('[AIProvider] No provider supports embedding generation.');
 	}
 
 	// -- Model Management --------------------------------------------
