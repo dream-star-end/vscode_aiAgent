@@ -24,7 +24,7 @@
 
 | ID | 任务 | 状态 | 依赖 | 验收标准 |
 |----|------|------|------|---------|
-| P0-1-1 | 修改 `product.json` 品牌信息（nameShort/nameLong/applicationName/dataFolderName/urlProtocol 等） | `[ ]` | 无 | 编译通过，启动后标题栏和 About 显示新品牌名 |
+| P0-1-1 | 修改 `product.json` 品牌信息（nameShort/nameLong/applicationName/dataFolderName/urlProtocol 等） | `[x]` | 无 | 编译通过，启动后标题栏和 About 显示新品牌名 |
 | P0-1-2 | 替换 `resources/` 图标（应用图标/文件类型图标/托盘图标） | `[ ]` | P0-1-1 | 所有平台图标正确显示 |
 | P0-1-3 | 更新打包脚本中的品牌引用（`build/` 下的 gulp 任务） | `[ ]` | P0-1-1 | `npm run compile` 通过 |
 | P0-1-4 | 确保 VS Code Extension API 100% 兼容性（运行 vscode-api-tests） | `[ ]` | P0-1-1 | `npm run test-extension` 通过 |
@@ -33,8 +33,8 @@
 
 | ID | 任务 | 状态 | 依赖 | 验收标准 |
 |----|------|------|------|---------|
-| P0-2-1 | 定义 `IAIProviderService` 接口（`src/vs/platform/aiProvider/common/aiProvider.ts`） | `[ ]` | 无 | 接口包含 chatCompletion/codeCompletion/codeCompletionStream/generateEmbedding/generateEmbeddings/listModels/getModelMetadata |
-| P0-2-2 | 定义 `IAIProvider` / `IChatRequest` / `IAIModelMetadata` 等类型 | `[ ]` | P0-2-1 | TypeScript 编译通过 |
+| P0-2-1 | 定义 `IAIProviderService` 接口（`src/vs/platform/aiProvider/common/aiProvider.ts`） | `[x]` | 无 | 接口包含 chatCompletion/codeCompletion/codeCompletionStream/generateEmbedding/generateEmbeddings/listModels/getModelMetadata |
+| P0-2-2 | 定义 `IAIProvider` / `IChatRequest` / `IAIModelMetadata` 等类型 | `[x]` | P0-2-1 | TypeScript 编译通过 |
 | P0-2-3 | 实现 `OpenAIProvider`（GPT-4o, o1, o3） | `[ ]` | P0-2-2 | chatCompletion 流式返回正常，可列出模型 |
 | P0-2-4 | 实现 `AnthropicProvider`（Claude Sonnet, Opus），含 Prompt 缓存支持 | `[ ]` | P0-2-2 | cache_control 字段正确发送，缓存命中可验证 |
 | P0-2-5 | 实现 `DeepSeekProvider` | `[ ]` | P0-2-2 | chatCompletion + codeCompletion 正常 |
@@ -50,7 +50,7 @@
 
 | ID | 任务 | 状态 | 依赖 | 验收标准 |
 |----|------|------|------|---------|
-| P0-3-1 | 定义 `IPermissionService` 接口（`src/vs/platform/aiPermission/`） | `[ ]` | 无 | 接口包含 requestPermission/addRule |
+| P0-3-1 | 定义 `IPermissionService` 接口（`src/vs/platform/aiPermission/`） | `[x]` | 无 | 接口包含 requestPermission/addRule |
 | P0-3-2 | 实现四层权限（只读/编辑/执行/危险）+ deny→ask→allow 评估链 | `[ ]` | P0-3-1 | 各层默认行为正确 |
 | P0-3-3 | 实现 specifier 粒度匹配（如 `Bash(npm run *)`） | `[ ]` | P0-3-2 | 模式匹配正确 |
 | P0-3-4 | 实现持久化范围（会话/项目/全局） | `[ ]` | P0-3-2 | 重启后项目级权限保留 |
@@ -60,7 +60,7 @@
 
 | ID | 任务 | 状态 | 依赖 | 验收标准 |
 |----|------|------|------|---------|
-| P0-4-1 | 在 `product.json` 中配置推荐 MCP Server 列表 | `[ ]` | P0-1-1 | filesystem/git/fetch Server 可自动发现 |
+| P0-4-1 | 在 `product.json` 中配置推荐 MCP Server 列表 | `[x]` | P0-1-1 | filesystem/git/fetch Server 可自动发现 |
 | P0-4-2 | 实现 MCP Server 预启动（首次使用时自动安装） | `[ ]` | P0-4-1 | 用户无需手动配置即可使用基础 MCP 工具 |
 
 ---
@@ -366,12 +366,12 @@
 
 | Phase | 任务数 | 已完成 | 进行中 | 阻塞 |
 |-------|--------|--------|--------|------|
-| Phase 0 | 23 | 0 | 0 | 0 |
+| Phase 0 | 23 | 5 | 0 | 0 |
 | Phase 1 | 28 | 0 | 0 | 0 |
 | Phase 2a | 25 | 0 | 0 | 0 |
 | Phase 2b | 22 | 0 | 0 | 0 |
 | Phase 3 | 17 | 0 | 0 | 0 |
 | Phase 4 | 18 | 0 | 0 | 0 |
-| **总计** | **133** | **0** | **0** | **0** |
+| **总计** | **133** | **5** | **0** | **0** |
 
-> 最后更新: 2026-03-02
+> 最后更新: 2026-03-02 (P0-1-1, P0-2-1, P0-2-2, P0-3-1, P0-4-1 完成)
