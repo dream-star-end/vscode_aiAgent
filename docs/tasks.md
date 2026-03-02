@@ -35,14 +35,14 @@
 |----|------|------|------|---------|
 | P0-2-1 | 定义 `IAIProviderService` 接口（`src/vs/platform/aiProvider/common/aiProvider.ts`） | `[x]` | 无 | 接口包含 chatCompletion/codeCompletion/codeCompletionStream/generateEmbedding/generateEmbeddings/listModels/getModelMetadata |
 | P0-2-2 | 定义 `IAIProvider` / `IChatRequest` / `IAIModelMetadata` 等类型 | `[x]` | P0-2-1 | TypeScript 编译通过 |
-| P0-2-3 | 实现 `OpenAIProvider`（GPT-4o, o1, o3） | `[ ]` | P0-2-2 | chatCompletion 流式返回正常，可列出模型 |
-| P0-2-4 | 实现 `AnthropicProvider`（Claude Sonnet, Opus），含 Prompt 缓存支持 | `[ ]` | P0-2-2 | cache_control 字段正确发送，缓存命中可验证 |
-| P0-2-5 | 实现 `DeepSeekProvider` | `[ ]` | P0-2-2 | chatCompletion + codeCompletion 正常 |
-| P0-2-6 | 实现 `GeminiProvider`（Gemini Pro/Flash） | `[ ]` | P0-2-2 | chatCompletion 正常，长上下文支持验证 |
-| P0-2-7 | 实现 `OllamaProvider`（本地模型） | `[ ]` | P0-2-2 | 本地 Ollama 实例可连接并推理 |
-| P0-2-8 | 实现 `CustomOpenAIProvider`（兼容端点） | `[ ]` | P0-2-2 | 可配置自定义 baseURL 和 API Key |
+| P0-2-3 | 实现 `OpenAIProvider`（GPT-4o, o1, o3） | `[x]` | P0-2-2 | chatCompletion 流式返回正常，可列出模型 |
+| P0-2-4 | 实现 `AnthropicProvider`（Claude Sonnet, Opus），含 Prompt 缓存支持 | `[x]` | P0-2-2 | cache_control 字段正确发送，缓存命中可验证 |
+| P0-2-5 | 实现 `DeepSeekProvider` | `[x]` | P0-2-2 | chatCompletion + codeCompletion 正常 |
+| P0-2-6 | 实现 `GeminiProvider`（Gemini Pro/Flash） | `[x]` | P0-2-2 | chatCompletion 正常，长上下文支持验证 |
+| P0-2-7 | 实现 `OllamaProvider`（本地模型） | `[x]` | P0-2-2 | 本地 Ollama 实例可连接并推理 |
+| P0-2-8 | 实现 `CustomOpenAIProvider`（兼容端点） | `[x]` | P0-2-2 | 可配置自定义 baseURL 和 API Key |
 | P0-2-9 | 实现 `AIProviderConnectionPool`（HTTP/2 连接池 + Prompt 缓存） | `[ ]` | P0-2-3 | 连接复用验证，缓存命中率可观测 |
-| P0-2-10 | Provider 设置 UI（API Key 配置/模型选择/Provider 切换） | `[ ]` | P0-2-3 | 设置面板可配置所有 Provider 参数 |
+| P0-2-10 | Provider 设置 UI（API Key 配置/模型选择/Provider 切换） | `[x]` | P0-2-3 | 设置面板可配置所有 Provider 参数 |
 | P0-2-11 | Provider fallback 和热切换逻辑 | `[ ]` | P0-2-3 | Provider 故障时自动切换到 fallback |
 | P0-2-12 | API Key 加密存储（使用 VS Code SecretStorage） | `[ ]` | P0-2-10 | Key 不以明文存储，重启后可恢复 |
 
@@ -51,9 +51,9 @@
 | ID | 任务 | 状态 | 依赖 | 验收标准 |
 |----|------|------|------|---------|
 | P0-3-1 | 定义 `IPermissionService` 接口（`src/vs/platform/aiPermission/`） | `[x]` | 无 | 接口包含 requestPermission/addRule |
-| P0-3-2 | 实现四层权限（只读/编辑/执行/危险）+ deny→ask→allow 评估链 | `[ ]` | P0-3-1 | 各层默认行为正确 |
-| P0-3-3 | 实现 specifier 粒度匹配（如 `Bash(npm run *)`） | `[ ]` | P0-3-2 | 模式匹配正确 |
-| P0-3-4 | 实现持久化范围（会话/项目/全局） | `[ ]` | P0-3-2 | 重启后项目级权限保留 |
+| P0-3-2 | 实现四层权限（只读/编辑/执行/危险）+ deny→ask→allow 评估链 | `[x]` | P0-3-1 | 各层默认行为正确 |
+| P0-3-3 | 实现 specifier 粒度匹配（如 `Bash(npm run *)`） | `[x]` | P0-3-2 | 模式匹配正确 |
+| P0-3-4 | 实现持久化范围（会话/项目/全局） | `[x]` | P0-3-2 | 重启后项目级权限保留 |
 | P0-3-5 | 权限确认 UI（弹窗 + 记住选择） | `[ ]` | P0-3-2 | 用户可确认/拒绝/始终允许 |
 
 ### P0-4: MCP 预配置
@@ -366,12 +366,12 @@
 
 | Phase | 任务数 | 已完成 | 进行中 | 阻塞 |
 |-------|--------|--------|--------|------|
-| Phase 0 | 23 | 5 | 0 | 0 |
+| Phase 0 | 23 | 15 | 0 | 0 |
 | Phase 1 | 28 | 0 | 0 | 0 |
 | Phase 2a | 25 | 0 | 0 | 0 |
 | Phase 2b | 22 | 0 | 0 | 0 |
 | Phase 3 | 17 | 0 | 0 | 0 |
 | Phase 4 | 18 | 0 | 0 | 0 |
-| **总计** | **133** | **5** | **0** | **0** |
+| **总计** | **133** | **15** | **0** | **0** |
 
-> 最后更新: 2026-03-02 (P0-1-1, P0-2-1, P0-2-2, P0-3-1, P0-4-1 完成)
+> 最后更新: 2026-03-02 (Phase 0: 15/23 完成 - 品牌定制、全部6个Provider、设置UI、权限系统核心)
