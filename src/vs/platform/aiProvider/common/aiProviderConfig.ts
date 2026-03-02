@@ -29,10 +29,22 @@ const aiProviderConfigNode: IConfigurationNode = {
 			description: localize('aiProvider.activeProvider.desc', "The active AI provider to use for chat, completion, and agent tasks."),
 			scope: ConfigurationScope.APPLICATION,
 		},
+		'aiProvider.openai.apiKey': {
+			type: 'string',
+			default: '',
+			description: localize('aiProvider.openai.apiKey', "OpenAI API key."),
+			scope: ConfigurationScope.APPLICATION,
+		},
 		'aiProvider.openai.model': {
 			type: 'string',
 			default: 'gpt-4o',
 			description: localize('aiProvider.openai.model', "Default OpenAI model for chat."),
+			scope: ConfigurationScope.APPLICATION,
+		},
+		'aiProvider.anthropic.apiKey': {
+			type: 'string',
+			default: '',
+			description: localize('aiProvider.anthropic.apiKey', "Anthropic API key."),
 			scope: ConfigurationScope.APPLICATION,
 		},
 		'aiProvider.anthropic.model': {
@@ -41,10 +53,22 @@ const aiProviderConfigNode: IConfigurationNode = {
 			description: localize('aiProvider.anthropic.model', "Default Anthropic model for chat."),
 			scope: ConfigurationScope.APPLICATION,
 		},
+		'aiProvider.deepseek.apiKey': {
+			type: 'string',
+			default: '',
+			description: localize('aiProvider.deepseek.apiKey', "DeepSeek API key."),
+			scope: ConfigurationScope.APPLICATION,
+		},
 		'aiProvider.deepseek.model': {
 			type: 'string',
 			default: 'deepseek-chat',
 			description: localize('aiProvider.deepseek.model', "Default DeepSeek model for chat."),
+			scope: ConfigurationScope.APPLICATION,
+		},
+		'aiProvider.gemini.apiKey': {
+			type: 'string',
+			default: '',
+			description: localize('aiProvider.gemini.apiKey', "Google Gemini API key."),
 			scope: ConfigurationScope.APPLICATION,
 		},
 		'aiProvider.gemini.model': {
@@ -63,6 +87,12 @@ const aiProviderConfigNode: IConfigurationNode = {
 			type: 'string',
 			default: '',
 			description: localize('aiProvider.ollama.model', "Default Ollama model. Leave empty to use the first available."),
+			scope: ConfigurationScope.APPLICATION,
+		},
+		'aiProvider.customOpenAI.apiKey': {
+			type: 'string',
+			default: '',
+			description: localize('aiProvider.custom.apiKey', "API key for the custom OpenAI-compatible endpoint."),
 			scope: ConfigurationScope.APPLICATION,
 		},
 		'aiProvider.customOpenAI.baseUrl': {

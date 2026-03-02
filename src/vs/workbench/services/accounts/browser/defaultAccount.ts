@@ -88,25 +88,25 @@ interface IMcpRegistryResponse {
 function toDefaultAccountConfig(defaultChatAgent: IDefaultChatAgent): IDefaultAccountConfig {
 	return {
 		preferredExtensions: [
-			defaultChatAgent.chatExtensionId,
-			defaultChatAgent.extensionId,
-		],
+			defaultChatAgent.chatExtensionId ?? '',
+			defaultChatAgent.extensionId ?? '',
+		].filter(Boolean),
 		authenticationProvider: {
 			default: {
-				id: defaultChatAgent.provider.default.id,
-				name: defaultChatAgent.provider.default.name,
+				id: defaultChatAgent.provider?.default?.id ?? '',
+				name: defaultChatAgent.provider?.default?.name ?? '',
 			},
 			enterprise: {
-				id: defaultChatAgent.provider.enterprise.id,
-				name: defaultChatAgent.provider.enterprise.name,
+				id: defaultChatAgent.provider?.enterprise?.id ?? '',
+				name: defaultChatAgent.provider?.enterprise?.name ?? '',
 			},
-			enterpriseProviderConfig: `${defaultChatAgent.completionsAdvancedSetting}.authProvider`,
-			enterpriseProviderUriSetting: defaultChatAgent.providerUriSetting,
-			scopes: defaultChatAgent.providerScopes,
+			enterpriseProviderConfig: defaultChatAgent.completionsAdvancedSetting ? `${defaultChatAgent.completionsAdvancedSetting}.authProvider` : '',
+			enterpriseProviderUriSetting: defaultChatAgent.providerUriSetting ?? '',
+			scopes: defaultChatAgent.providerScopes ?? [],
 		},
-		entitlementUrl: defaultChatAgent.entitlementUrl,
-		tokenEntitlementUrl: defaultChatAgent.tokenEntitlementUrl,
-		mcpRegistryDataUrl: defaultChatAgent.mcpRegistryDataUrl,
+		entitlementUrl: defaultChatAgent.entitlementUrl ?? '',
+		tokenEntitlementUrl: defaultChatAgent.tokenEntitlementUrl ?? '',
+		mcpRegistryDataUrl: defaultChatAgent.mcpRegistryDataUrl ?? '',
 	};
 }
 

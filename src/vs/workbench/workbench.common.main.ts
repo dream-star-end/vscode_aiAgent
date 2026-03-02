@@ -56,6 +56,8 @@ import '../platform/actions/common/actions.contribution.js';
 import '../platform/undoRedo/common/undoRedoService.js';
 import '../platform/mcp/common/mcpResourceScannerService.js';
 import '../platform/aiProvider/common/aiProviderConfig.js';
+import '../platform/aiProvider/common/aiProviderService.js';
+import '../platform/aiPermission/common/aiPermissionService.js';
 import './services/workspaces/common/editSessionIdentityService.js';
 import './services/workspaces/common/canonicalUriService.js';
 import './services/extensions/browser/extensionUrlHandler.js';
