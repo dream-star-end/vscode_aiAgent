@@ -9,6 +9,7 @@ import {
 	IAIModelCapabilities,
 	IAIModelMetadata,
 	IAIProvider,
+	IChatCompletionChoice,
 	IChatCompletionChunk,
 	IChatCompletionRequest,
 	IChatMessage,
@@ -401,14 +402,14 @@ export class OpenAICompatibleProvider implements IAIProvider {
 	private toChunk(data: OpenAIStreamChunk): IChatCompletionChunk {
 		return {
 			id: data.id ?? '',
-			choices: (data.choices ?? []).map((c) => ({
+			choices: (data.choices ?? []).map((c): IChatCompletionChoice => ({
 				index: c.index ?? 0,
 				delta: {
-					role: c.delta?.role,
+					role: c.delta?.role as IChatMessage['role'] | undefined,
 					content: c.delta?.content ?? undefined,
 					toolCalls: c.delta?.tool_calls?.map((tc) => ({
 						id: tc.id ?? '',
-						type: tc.type ?? 'function',
+						type: 'function' as const,
 						function: { name: tc.function?.name ?? '', arguments: tc.function?.arguments ?? '' },
 					})),
 				},

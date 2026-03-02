@@ -29,12 +29,14 @@ export class OllamaProvider extends OpenAICompatibleProvider {
 				return super.listModels();
 			}
 			const data = await response.json() as { models?: OllamaModelEntry[] };
-			const models = (data.models ?? []).map((m) => ({
-				id: m.name ?? m.model,
-				name: m.name ?? m.model,
-				providerId: this.id,
-				capabilities: { chat: true, completion: true, embedding: false, vision: false, toolUse: false, streaming: true },
-			}));
+			const models: IAIModel[] = (data.models ?? [])
+				.filter((m): m is OllamaModelEntry & { name: string } => typeof m.name === 'string' || typeof m.model === 'string')
+				.map((m) => ({
+					id: (m.name ?? m.model) as string,
+					name: (m.name ?? m.model) as string,
+					providerId: this.id,
+					capabilities: { chat: true, completion: true, embedding: false, vision: false, toolUse: false, streaming: true },
+				}));
 			return models;
 		} catch {
 			return super.listModels();
